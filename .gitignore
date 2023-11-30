@@ -1,0 +1,7 @@
+cifar10-64/
+my_env/
+runs/
+results/
+.vscode/
+__pycache__/
+

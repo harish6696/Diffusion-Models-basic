@@ -99,7 +99,7 @@ def launch():
     args.epochs = 500
     args.batch_size = 12
     args.image_size = 64
-    args.dataset_path = r"C:\Users\dome\datasets\landscape_img_folder"
+    args.dataset_path = r"cifar10-64"
     args.device = "cuda"
     args.lr = 3e-4
     train(args)
