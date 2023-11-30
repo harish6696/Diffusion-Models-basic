@@ -130,6 +130,8 @@ class UNet(nn.Module):
         super().__init__()
         self.device = device
         self.time_dim = time_dim
+
+        #Down sampling
         self.inc = DoubleConv(c_in, 64)
         self.down1 = Down(64, 128)
         self.sa1 = SelfAttention(128, 32)
@@ -138,10 +140,12 @@ class UNet(nn.Module):
         self.down3 = Down(256, 256)
         self.sa3 = SelfAttention(256, 8)
 
+        #bottle neck
         self.bot1 = DoubleConv(256, 512)
         self.bot2 = DoubleConv(512, 512)
         self.bot3 = DoubleConv(512, 256)
 
+        #Up sampling
         self.up1 = Up(512, 128)
         self.sa4 = SelfAttention(128, 16)
         self.up2 = Up(256, 64)
@@ -150,7 +154,7 @@ class UNet(nn.Module):
         self.sa6 = SelfAttention(64, 64)
         self.outc = nn.Conv2d(64, c_out, kernel_size=1)
 
-    def pos_encoding(self, t, channels):
+    def pos_encoding(self, t, channels): #sinusoidal positional encoding
         inv_freq = 1.0 / (
             10000
             ** (torch.arange(0, channels, 2, device=self.device).float() / channels)
@@ -160,17 +164,17 @@ class UNet(nn.Module):
         pos_enc = torch.cat([pos_enc_a, pos_enc_b], dim=-1)
         return pos_enc
 
-    def forward(self, x, t):
-        t = t.unsqueeze(-1).type(torch.float)
-        t = self.pos_encoding(t, self.time_dim)
+    def forward(self, x, t):                #x.shape = [4,3,64,64] and t.shape [4,] for cifar10-64
+        t = t.unsqueeze(-1).type(torch.float) #t.shape = [4,1]
+        t = self.pos_encoding(t, self.time_dim) #here sinusoidal positional encoding is used t.shape = [4,256]
 
-        x1 = self.inc(x)
-        x2 = self.down1(x1, t)
-        x2 = self.sa1(x2)
-        x3 = self.down2(x2, t)
-        x3 = self.sa2(x3)
-        x4 = self.down3(x3, t)
-        x4 = self.sa3(x4)
+        x1 = self.inc(x)       #converts x.shape = [4,3,64,64] to x1.shape = [4,64,64,64]
+        x2 = self.down1(x1, t) #x2.shape = [4,128,32,32]
+        x2 = self.sa1(x2)      
+        x3 = self.down2(x2, t) #x3.shape = [4,256,16,16]
+        x3 = self.sa2(x3)      
+        x4 = self.down3(x3, t) 
+        x4 = self.sa3(x4)      #x4.shape = [4,256,8,8]
 
         x4 = self.bot1(x4)
         x4 = self.bot2(x4)
@@ -182,7 +186,7 @@ class UNet(nn.Module):
         x = self.sa5(x)
         x = self.up3(x, x1, t)
         x = self.sa6(x)
-        output = self.outc(x)
+        output = self.outc(x) #shape = [4,3,64,64]
         return output
 
 

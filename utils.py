@@ -27,8 +27,8 @@ def get_data(args):
         torchvision.transforms.RandomResizedCrop(args.image_size, scale=(0.8, 1.0)),
         torchvision.transforms.ToTensor(),
         torchvision.transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-    ])
-    dataset = torchvision.datasets.ImageFolder(args.dataset_path, transform=transforms)
+    ])#simple image preprocessing, transforms the image betwen -1 and 1
+    dataset = torchvision.datasets.ImageFolder(args.dataset_path, transform=transforms)# total of 60,000 images (train amd test combined) in cifar10-64, batch size = 4, so 15000 images per batch
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
     return dataloader
 

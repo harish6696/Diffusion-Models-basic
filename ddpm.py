@@ -11,6 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s: %(message)s", level=logging.INFO, datefmt="%I:%M:%S")
 
+"""This code is based on the DDPM Paper: https://arxiv.org/abs/2006.11239"""
 
 class Diffusion:
     def __init__(self, noise_steps=1000, beta_start=1e-4, beta_end=0.02, img_size=256, device="cuda"):
@@ -20,41 +21,45 @@ class Diffusion:
         self.img_size = img_size
         self.device = device
 
-        self.beta = self.prepare_noise_schedule().to(device)
-        self.alpha = 1. - self.beta
-        self.alpha_hat = torch.cumprod(self.alpha, dim=0)
+        self.beta = self.prepare_noise_schedule().to(device) #linearly increasing noise level for each time-step (no. of steps = 1000 by default) shape [1000]
+        self.alpha = 1. - self.beta #shape [1000]
+        self.alpha_hat = torch.cumprod(self.alpha, dim=0) #shape [1000]
 
-    def prepare_noise_schedule(self):
+    def prepare_noise_schedule(self):  #linear-scheduler 
         return torch.linspace(self.beta_start, self.beta_end, self.noise_steps)
 
-    def noise_images(self, x, t):
+    def noise_images(self, x, t): #Forward diffusion pass (directly generate the noised image at time t)
         sqrt_alpha_hat = torch.sqrt(self.alpha_hat[t])[:, None, None, None]
         sqrt_one_minus_alpha_hat = torch.sqrt(1 - self.alpha_hat[t])[:, None, None, None]
         Ɛ = torch.randn_like(x)
         return sqrt_alpha_hat * x + sqrt_one_minus_alpha_hat * Ɛ, Ɛ
 
-    def sample_timesteps(self, n):
+    def sample_timesteps(self, n):  #Sample a timestep (step 3)
         return torch.randint(low=1, high=self.noise_steps, size=(n,))
-
-    def sample(self, model, n):
+    
+    #Inference (Algo 2)
+    def sample(self, model, n): 
         logging.info(f"Sampling {n} new images....")
-        model.eval()
+        model.eval() #sets the model to evaluation mode, Specifically, layers like dropout layers or batch normalization layers may have different behavior during training and evaluation.
         with torch.no_grad():
-            x = torch.randn((n, 3, self.img_size, self.img_size)).to(self.device)
-            for i in tqdm(reversed(range(1, self.noise_steps)), position=0):
-                t = (torch.ones(n) * i).long().to(self.device)
-                predicted_noise = model(x, t)
-                alpha = self.alpha[t][:, None, None, None]
-                alpha_hat = self.alpha_hat[t][:, None, None, None]
-                beta = self.beta[t][:, None, None, None]
+            x = torch.randn((n, 3, self.img_size, self.img_size)).to(self.device) #initial image sampled from a normal distribution (pure noise) (shape: [n,3,64,64] for cifar10-64)
+            for i in tqdm(reversed(range(1, self.noise_steps)), position=0): # loop starting from 1000 to 1 (by default)
+                t = (torch.ones(n) * i).long().to(self.device) #creates [i,i, i ... i] (shape: [n,])
+                predicted_noise = model(x, t)  #from the model, we predict the noise at time t. For n=8,i=1, t=[1,1,1,1,1,1,1,1]
+                alpha = self.alpha[t][:, None, None, None]  #self.alpha[t=1] = [0.9999, 0.9999, 0.9999, 0.9999, 0.9999, 0.9999, 0.9999, 0.9999]], shape = [8]
+                                                            #self.alpha[t][:,None,None,None]. shape =[8,1,1,1]       
+                alpha_hat = self.alpha_hat[t][:, None, None, None] 
+                beta = self.beta[t][:, None, None, None]            
                 if i > 1:
                     noise = torch.randn_like(x)
                 else:
-                    noise = torch.zeros_like(x)
+                    noise = torch.zeros_like(x) #at the last step, we don't add noise
+                """Denoising step: noise is removed sequentially from all the 'n' images"""
                 x = 1 / torch.sqrt(alpha) * (x - ((1 - alpha) / (torch.sqrt(1 - alpha_hat))) * predicted_noise) + torch.sqrt(beta) * noise
-        model.train()
-        x = (x.clamp(-1, 1) + 1) / 2
-        x = (x * 255).type(torch.uint8)
+                #shape of x = [8,3,64,64]       
+        model.train()  #again set to training mode because sampling is called after every epoch in training loop
+#        x = (x.clamp(-1, 1) + 1) / 2
+        x = (x * 255).type(torch.uint8) #recover the original image
         return x
 
 
@@ -67,17 +72,17 @@ def train(args):
     mse = nn.MSELoss()
     diffusion = Diffusion(img_size=args.image_size, device=device)
     logger = SummaryWriter(os.path.join("runs", args.run_name))
-    l = len(dataloader)
+    l = len(dataloader) #for batch size 4, l = 15000
 
-    for epoch in range(args.epochs):
+    for epoch in range(args.epochs): #each epoch runs over the entire dataset
         logging.info(f"Starting epoch {epoch}:")
-        pbar = tqdm(dataloader)
-        for i, (images, _) in enumerate(pbar):
-            images = images.to(device)
-            t = diffusion.sample_timesteps(images.shape[0]).to(device)
-            x_t, noise = diffusion.noise_images(images, t)
-            predicted_noise = model(x_t, t)
-            loss = mse(noise, predicted_noise)
+        pbar = tqdm(dataloader) #We get a batch of images from the dataloader. One batch has 15000 images. pbar has access to all the images in the dataset i.e. 60000
+        for i, (images, _) in enumerate(pbar): #loop over 
+            images = images.to(device)     #images hace shape [4,3,64,64] for batch size 4
+            t = diffusion.sample_timesteps(images.shape[0]).to(device) #randomly sample 4 timesteps between 1 and 1000. t:(shape: [4,])
+            x_t, noise = diffusion.noise_images(images, t) #for a given time t, we get the noised image (x_t) and the noise (Forward process), noise.shape = [4,3,64,64]
+            predicted_noise = model(x_t, t) #shape of predicted_noise = [4,3,64,64]
+            loss = mse(noise, predicted_noise) #scalar value
 
             optimizer.zero_grad()
             loss.backward()
@@ -86,8 +91,8 @@ def train(args):
             pbar.set_postfix(MSE=loss.item())
             logger.add_scalar("MSE", loss.item(), global_step=epoch * l + i)
 
-        sampled_images = diffusion.sample(model, n=images.shape[0])
-        save_images(sampled_images, os.path.join("results", args.run_name, f"{epoch}.jpg"))
+        sampled_images = diffusion.sample(model, n=images.shape[0]) #running inference to see how the quality of image improves with epochs
+        save_images(sampled_images, os.path.join("results", args.run_name, f"{epoch}.jpg")) 
         torch.save(model.state_dict(), os.path.join("models", args.run_name, f"ckpt.pt"))
 
 
@@ -99,7 +104,7 @@ def launch():
     args.epochs = 500
     args.batch_size = 4
     args.image_size = 64
-    args.dataset_path = r"cifar10-64"
+    args.dataset_path = r"cifar10-64"  #training data has a total of 50,000 images and test data has 10,000 images
     args.device = "cuda"
     args.lr = 3e-4
     train(args)
